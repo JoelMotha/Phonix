@@ -1,4 +1,4 @@
-model: OnePlus 11 5G
+"model: OnePlus 11 5G
 price: ₹54,999
 rating: 89.0
 processor: Snapdragon 8 Gen2
