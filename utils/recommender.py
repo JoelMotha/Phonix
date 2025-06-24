@@ -4,11 +4,6 @@ import re
 from parser import parse_prompt
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # directory of this script
-csv_path = os.path.join(BASE_DIR, "utils", "tagged_dataset.csv")
-df = pd.read_csv("tagged_dataset.csv")
-df['tags'] = df['tags'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else [])
-
 # Fix the price column
 def clean_price(value):
     try:
@@ -16,14 +11,18 @@ def clean_price(value):
     except:
         return None
 
-df["price"] = df["price"].apply(clean_price)
-df.dropna(subset=["price"], inplace=True)
-df["price"] = df["price"].astype(int)
+# Load dataset function
+def load_dataset(path='tagged_dataset.csv'):
+    df = pd.read_csv(path)
+    df['tags'] = df['tags'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else [])
+    df["price"] = df["price"].apply(clean_price)
+    df.dropna(subset=["price"], inplace=True)
+    df["price"] = df["price"].astype(int)
+    return df
 
-# Known brands list for brand filtering
+# Brand and feature weights
 known_brands = ["Apple", "Samsung", "Xiaomi", "OnePlus", "Realme", "Vivo", "Oppo", "Asus", "Motorola", "Google"]
 
-# Tag weights
 feature_weights = {
     "performance": 2.0,
     "camera": 1.8,
@@ -41,13 +40,15 @@ feature_weights = {
     "content creation": 1.3
 }
 
+# Extract budget intelligently
 def extract_budget_from_prompt(prompt):
-    # Find all numbers in the prompt, assuming the first large number is budget in INR
-    # We ignore small numbers < 1000 to avoid false positives
+    prompt = prompt.lower()
+    if any(word in prompt for word in ["affordable", "budget", "cheap", "low-end"]):
+        return 20000  # Default budget for affordability
     numbers = re.findall(r'\d+', prompt.replace(',', ''))
     for num in numbers:
         value = int(num)
-        if value >= 1000:  # threshold can be adjusted if needed
+        if value >= 1000:
             return value
     return None
 
@@ -58,13 +59,12 @@ def extract_brand_from_prompt(prompt):
             return brand
     return None
 
-def recommend_phone(user_prompt, top_n=5, debug=False, brand_filter=None):
+def recommend_phone(user_prompt, df, top_n=5, debug=False, brand_filter=None):
     parsed = parse_prompt(user_prompt)
     intent = parsed.get("intent")
     budget = parsed.get("budget")
     features = set(parsed.get("supporting_features", []))
 
-    # Fallback: use keywords if no supporting features are extracted
     if not features:
         features = set(parsed.get("keywords", []))
 
@@ -73,44 +73,52 @@ def recommend_phone(user_prompt, top_n=5, debug=False, brand_filter=None):
 
     filtered_df = df.copy()
 
-    # Apply brand filter
     if brand_filter:
         filtered_df = filtered_df[filtered_df['brand'].str.lower() == brand_filter.lower()]
 
-    # Apply budget filter
     if budget:
         filtered_df = filtered_df[filtered_df['price'] <= budget]
 
-    # Apply intent filter (phones must have the intent tag)
-    if intent:
+    if intent and not features:
         filtered_df = filtered_df[filtered_df['tags'].apply(lambda tags: intent in tags)]
 
-    # Score phones with weighted tags and matched features
-    def compute_score(tags):
+    def compute_score(row):
+        tags = row['tags']
+        price = row['price']
         matched = features.intersection(set(tags))
         matched_score = sum(feature_weights.get(f, 1.0) for f in matched)
         intent_bonus = feature_weights.get(intent, 1.0) if intent in tags else 0
-        total_possible = sum(feature_weights.get(f, 1.0) for f in features) + feature_weights.get(intent, 1.0)
+        total_possible = sum(feature_weights.get(f, 1.0) for f in features) + (feature_weights.get(intent, 1.0) if intent else 0)
         final_score = (matched_score + intent_bonus) / total_possible if total_possible else 0
+
+        if "affordable" in features and price > 25000:
+            final_score *= 0.6
+
         return int(final_score * 500), list(matched)
 
-    scores_and_matches = filtered_df['tags'].apply(compute_score)
+    scores_and_matches = filtered_df.apply(compute_score, axis=1)
     filtered_df["match_score"] = [score for score, match in scores_and_matches]
     filtered_df["matched_features"] = [match for score, match in scores_and_matches]
 
     if filtered_df.empty:
         return "No matching phones found for your query."
 
-    # Sort and return top N
-    top_matches = filtered_df.sort_values(by="match_score", ascending=False)
+    if features or intent:
+        top_matches = filtered_df.sort_values(by="match_score", ascending=False)
+    else:
+        def fallback_score(tags):
+            return sum(feature_weights.get(tag, 1.0) for tag in tags)
+        filtered_df["fallback_score"] = filtered_df["tags"].apply(fallback_score)
+        top_matches = filtered_df.sort_values(by="fallback_score", ascending=False)
+        return top_matches[["brand", "model", "price", "tags", "fallback_score"]].head(top_n).reset_index(drop=True)
+
     return top_matches[["brand", "model", "price", "tags", "matched_features", "match_score"]].head(top_n).reset_index(drop=True)
 
 def print_recommendations(df):
-    if isinstance(df, str):  # handle error message string
+    if isinstance(df, str):
         print(df)
         return
 
-    # Sort by price descending
     df_sorted = df.sort_values(by="price", ascending=False).reset_index(drop=True)
 
     for i, row in df_sorted.iterrows():
@@ -118,14 +126,17 @@ def print_recommendations(df):
         print(f"Brand          : {row['brand']}")
         print(f"Model          : {row['model']}")
         print(f"Price          : ₹{row['price']:,}")
-        print(f"Matched Features: {row['matched_features']}")
-        print(f"Match Score    : {row['match_score']} / 500")
+        if "matched_features" in row:
+            print(f"Matched Features: {row['matched_features']}")
+            print(f"Match Score    : {row['match_score']} / 500")
+        elif "fallback_score" in row:
+            print(f"Feature Richness Score: {row['fallback_score']} (fallback)")
 
-# ------------------------------
-# Main execution block
-# ------------------------------
 if __name__ == "__main__":
-    user_prompt = input("Enter your smartphone requirement: ")
+    df = load_dataset()
+    print("📱 Welcome to the Smartphone Recommender!")
+    
+    user_prompt = input("Enter your smartphone requirement: ").strip()
 
     extracted_budget = extract_budget_from_prompt(user_prompt)
     extracted_brand = extract_brand_from_prompt(user_prompt)
@@ -140,9 +151,9 @@ if __name__ == "__main__":
     if extracted_brand:
         print(f"Detected brand from prompt: {extracted_brand}")
 
-    result = recommend_phone(user_prompt, top_n=3, debug=True, brand_filter=extracted_brand)
+    result = recommend_phone(user_prompt, df, top_n=3, debug=True, brand_filter=extracted_brand)
 
     print("\nRecommendations:")
     print_recommendations(result)
-
     print("=" * 50)
+    print("👋 Exiting the recommender. Have a great day!")

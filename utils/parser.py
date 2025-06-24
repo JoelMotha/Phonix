@@ -113,7 +113,7 @@ def parse_prompt(prompt):
 
     return result
 
-# Sample prompts
+'''Sample prompts
 samples = [
     "I want a gaming phone under 25000",
     "Best phone for photography under ₹30,000",
@@ -144,3 +144,4 @@ samples = [
 for s in samples:
     print(f"\nPrompt: {s}")
     print(parse_prompt(s))
+'''
