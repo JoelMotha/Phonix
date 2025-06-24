@@ -135,25 +135,42 @@ def print_recommendations(df):
 if __name__ == "__main__":
     df = load_dataset()
     print("📱 Welcome to the Smartphone Recommender!")
-    
-    user_prompt = input("Enter your smartphone requirement: ").strip()
 
-    extracted_budget = extract_budget_from_prompt(user_prompt)
-    extracted_brand = extract_brand_from_prompt(user_prompt)
+    while True:
+        user_prompt = input("\nEnter your smartphone requirement: ").strip()
 
-    parsed = parse_prompt(user_prompt)
+        extracted_budget = extract_budget_from_prompt(user_prompt)
+        extracted_brand = extract_brand_from_prompt(user_prompt)
 
-    if extracted_budget:
-        parsed['budget'] = extracted_budget
-        if extracted_budget >= 1000:
-            print(f"Detected budget from prompt: ₹{extracted_budget}")
+        parsed = parse_prompt(user_prompt)
 
-    if extracted_brand:
-        print(f"Detected brand from prompt: {extracted_brand}")
+        if extracted_budget:
+            parsed['budget'] = extracted_budget
+            if extracted_budget >= 1000:
+                print(f"Detected budget from prompt: ₹{extracted_budget}")
 
-    result = recommend_phone(user_prompt, df, top_n=3, debug=True, brand_filter=extracted_brand)
+        if extracted_brand:
+            print(f"Detected brand from prompt: {extracted_brand}")
 
-    print("\nRecommendations:")
-    print_recommendations(result)
-    print("=" * 50)
-    print("👋 Exiting the recommender. Have a great day!")
+        # If intent and features are not found
+        has_intent_or_features = parsed.get("intent") or parsed.get("supporting_features") or parsed.get("keywords")
+        has_brand_and_budget = extracted_brand and extracted_budget
+
+        if not has_intent_or_features and not has_brand_and_budget:
+            print("\n⚠️ Sorry, we couldn't identify any specific requirements in your prompt.")
+            print("👉 Please be more specific about what you’re looking for — like performance, camera, gaming, battery life etc.")
+            continue  # Ask again
+        
+        else:
+            result = recommend_phone(user_prompt, df, top_n=3, debug=True, brand_filter=extracted_brand)
+
+            if isinstance(result, str):
+                print("\n❌", result)
+                print("😕 Please try again with a different or clearer requirement.")
+                continue  # Ask again
+
+            print("\nRecommendations:")
+            print_recommendations(result)
+            print("=" * 50)
+            print("🙏 Thanks for using the Smartphone Recommender. Have a great day!")
+            break  # Exit loop
